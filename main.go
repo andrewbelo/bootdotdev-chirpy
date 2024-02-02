@@ -1,83 +1,44 @@
 package main
 
 import (
-	"fmt"
+	"flag"
 	"log"
 	"net/http"
+
+	"github.com/andrewbelo/bootdotdev-chirpy/internal/db"
+	"github.com/andrewbelo/bootdotdev-chirpy/internal/routers"
+	"github.com/joho/godotenv"
 )
 
-type apiConfig struct {
-	fileserverHits int
-}
-
 func main() {
-	apiCfg := &apiConfig{0}
-	mux := http.NewServeMux()
+	dbg := flag.Bool("debug", false, "Enable debug mode")
+	godotenv.Load()
+	flag.Parse()
 
-	rootHandler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
-	assetsHandler := http.StripPrefix("/app/assets", http.FileServer(http.Dir("./assets")))
-
-	mux.Handle("/app/", apiCfg.middlewareMetricsInc(rootHandler))
-	mux.Handle("/app/assets", apiCfg.middlewareMetricsInc(assetsHandler))
-	mux.HandleFunc("/healthz", healthCheck)
-	mux.HandleFunc("/metrics", apiCfg.fileserverHitsHandler)
-	mux.HandleFunc("/reset", apiCfg.fileserverHitsResetHandler)
-
-	corsMux := middlewareCors(mux)
+	apiCfg, err := routers.NewApiConfig(*dbg)
+	if err != nil {
+		panic(err)
+	}
 	server := http.Server{
 		Addr:    ":8080",
-		Handler: corsMux,
+		Handler: routers.MiddlewareCors(routers.FinalRouter(&apiCfg)),
 	}
-	err := server.ListenAndServe()
+	log.Println("Listening on :8080")
+	err = server.ListenAndServe()
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Request: %s %s", r.Method, r.URL.Path)
-		cfg.fileserverHits++
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (cfg *apiConfig) getFileserverHits() string {
-	return fmt.Sprintf("Hits: %d", cfg.fileserverHits)
-}
-
-func (cfg *apiConfig) fileserverHitsReset() {
-	cfg.fileserverHits = 0
-}
-
-func (cfg *apiConfig) fileserverHitsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", " text/plain; charset=utf-8 ")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(cfg.getFileserverHits()))
-}
-
-func (cfg *apiConfig) fileserverHitsResetHandler(w http.ResponseWriter, r *http.Request) {
-	cfg.fileserverHitsReset()
-	w.Header().Set("Content-Type", " text/plain; charset=utf-8 ")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}
-
-func middlewareCors(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "*")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func healthCheck(w http.ResponseWriter, request *http.Request) {
-	w.Header().Set("Content-Type", " text/plain; charset=utf-8 ")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+func setupDB(dbg bool) *db.DB {
+	db_path := "chirps.json"
+	if dbg {
+		log.Println("Debug mode enabled")
+		db_path = "chirps_debug.json"
+	}
+	db, err := db.NewDB(db_path, dbg)
+	if err != nil {
+		panic(err)
+	}
+	return db
 }
